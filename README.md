@@ -65,3 +65,8 @@ cv_gen = KFold(n_splits = 10, shuffle = False)
 score = fml.cvScore(rf, X, y, sample_weight = cweight, scoring = 'neg_log_loss', cv = None, cvGen = cv_gen, pctEmbargo = 0)
 ```
 단, 여기서 사용되는 sample_weight는 행렬 X,y와 길이가 같아야 합니다. 또한, pandas version은 1.5.3으로 맞춰야 합니다
+
+
+## Pipeline Viewer
+An optional web interface for visualizing the function pipeline is provided in `pipeline_viewer/`.
+Run `python -m pipeline_viewer.app` and open `http://localhost:5000`. Click **Refresh** to update the graph.
