@@ -160,4 +160,19 @@ def plotFeatImportance(pathOut, imp, oob, oos, method, tag=0, simNum=0, **kargs)
     plt.close()
     return
 
-__all__ = ['plot_bar_counts','plot_hist','plotSampleData','plot_autocorr','plotWeights','plotMinFFD','plotFeatImportance','plotCorrMatrix']
+# ======================================================================
+# Additions from missing functions list
+# ======================================================================
+
+def OUHeatmap(coeffs, outputs):
+    """Return a seaborn heatmap for OU simulation results."""
+    heatdf = pd.DataFrame(outputs)
+    heatdfp = heatdf.pivot(1, 0, 4)
+    plt.subplots()
+    return sns.heatmap(heatdfp.sort_index(ascending=False))
+
+__all__ = [
+    'plot_bar_counts','plot_hist','plotSampleData','plot_autocorr',
+    'plotWeights','plotMinFFD','plotFeatImportance','plotCorrMatrix',
+    'OUHeatmap'
+]

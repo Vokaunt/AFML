@@ -250,4 +250,20 @@ def crossValPlot(skf,classifier,X_,y_):
     ax.set_title('Receiver operating characteristic example')
     ax.legend(bbox_to_anchor=(1,1))
 
-__all__ = ['PurgedKFold','cvScore','crossValPlot','getTrainTimes','getEmbargoTimes']
+# ======================================================================
+# Additions from missing functions list
+# ======================================================================
+
+def get_IS_sharpe_ratio(clf) -> float:
+    """Return in-sample Sharpe ratio from a CV estimator."""
+    best_est = np.argmin(clf.cv_results_['rank_test_score'])
+    mean_score = clf.cv_results_['mean_test_score'][best_est]
+    std_score = clf.cv_results_['std_test_score'][best_est]
+    if mean_score < 0:
+        return -mean_score / std_score
+    return mean_score / std_score
+
+__all__ = [
+    'PurgedKFold','cvScore','crossValPlot','getTrainTimes','getEmbargoTimes',
+    'get_IS_sharpe_ratio'
+]
