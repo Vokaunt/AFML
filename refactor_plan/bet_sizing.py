@@ -60,6 +60,9 @@ import copyreg, types, multiprocessing as mp
 import copy
 import platform
 from multiprocessing import cpu_count
+from dataclasses import dataclass
+from typing import Optional
+import brownian_motion
 
 from numba import jit
 from tqdm import tqdm, tqdm_notebook
@@ -81,6 +84,7 @@ from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection._split import _BaseKFold
 from sklearn import metrics
+from sklearn.linear_model import LinearRegression
 
 def avgActiveSignals_(signals: pd.DataFrame, molecule: np.ndarray):
     '''
@@ -373,4 +377,164 @@ def processBatch(coeffs_list, **kwargs):
         out.append((coeffs, Batch(coeffs, **kwargs)))
     return out
 
-__all__ = ['avgActiveSignals_','avgActiveSignals','discrete_signal','get_signal','betSize','getTargetPos','invPrice','limitPrice','getW','getNumConcBets','getBetsTiming','getHoldingPeriod','getHHI','computeDD_TuW','Batch','processBatch']
+# ======================================================================
+# Additions from missing functions list
+# ======================================================================
+
+def expected_max(N: int) -> float:
+    """Return expected maximum of ``N`` standard normal draws."""
+    if N < 5:
+        raise AssertionError("Condition N >> 1 not satisfied.")
+    return (
+        (1 - np.euler_gamma) * stats.norm.ppf(1 - 1.0 / N)
+        + np.euler_gamma * stats.norm.ppf(1 - np.exp(-1) / N)
+    )
+
+
+def PSR(sharpe: float, T: int, skew: float, kurtosis: float, target_sharpe: float = 0) -> float:
+    """Probabilistic Sharpe Ratio adjusting for skew and kurtosis."""
+    value = (
+        (sharpe - target_sharpe)
+        * np.sqrt(T - 1)
+        / np.sqrt(1.0 - skew * sharpe + sharpe ** 2 * (kurtosis - 1) / 4.0)
+    )
+    return stats.norm.cdf(value, 0, 1)
+
+
+def DSR(test_sharpe: float, sharpe_std: float, N: int, T: int, skew: float, kurtosis: float) -> float:
+    """Compute Deflated Sharpe Ratio for given performance series."""
+    target_sharpe = sharpe_std * expected_max(N)
+    return PSR(test_sharpe, T, skew, kurtosis, target_sharpe)
+
+
+def betSizePower(x: float, w: float) -> float:
+    """Power-transformed bet size used as an alternative to ``betSize``."""
+    return np.sign(w) * abs(w) ** x
+
+
+def binSR(sl: float, pt: float, freq: float, p: float) -> float:
+    """Theoretical annualized Sharpe ratio under a Bernoulli trading model."""
+    mean = p * pt - (1 - p) * sl
+    var = p * pt ** 2 + (1 - p) * sl ** 2 - mean ** 2
+    return np.sqrt(freq) * mean / np.sqrt(var)
+
+
+def binHR(sl: float, pt: float, freq: float, tSR: float) -> float:
+    """Solve for hit rate ``p`` that achieves target Sharpe ratio ``tSR``."""
+    a = (freq + tSR ** 2) * (pt - sl) ** 2
+    b = (2 * freq * sl - tSR ** 2 * (pt - sl)) * (pt - sl)
+    c = freq * sl ** 2
+    return (-b + np.sqrt(b ** 2 - 4 * a * c)) / (2.0 * a)
+
+
+def binFreq(sl: float, pt: float, p: float, tSR: float) -> Optional[float]:
+    """Frequency needed to reach a target Sharpe ratio."""
+    freq = (tSR * (pt - sl)) ** 2 * p * (1 - p) / ((pt - sl) * p + sl) ** 2
+    if not np.isclose(binSR(sl, pt, freq, p), tSR):
+        return None
+    return freq
+
+
+def mixGaussians(mu1, mu2, sigma1, sigma2, prob1, nObs):
+    """Sample ``nObs`` observations from a two-component Gaussian mixture."""
+    ret1 = np.random.normal(mu1, sigma1, size=int(nObs * prob1))
+    ret2 = np.random.normal(mu2, sigma2, size=int(nObs) - ret1.shape[0])
+    ret = np.append(ret1, ret2, axis=0)
+    np.random.shuffle(ret)
+    return ret
+
+
+def probFailure(ret: np.ndarray, freq: float, tSR: float) -> float:
+    """Probability that the Sharpe ratio does not exceed ``tSR``."""
+    rPos, rNeg = ret[ret > 0].mean(), ret[ret <= 0].mean()
+    p = ret[ret > 0].shape[0] / float(ret.shape[0])
+    thresP = binHR(rNeg, rPos, freq, tSR)
+    return stats.norm.cdf(thresP, p, p * (1 - p))
+
+
+def runSRtrials(p: float, pt: float = 1, sl: float = 1, trials: int = 100000) -> float:
+    """Monte Carlo estimate of the Sharpe ratio for a Bernoulli strategy."""
+    out = []
+    for _ in range(trials):
+        rnd = np.random.binomial(n=1, p=p)
+        out.append(pt if rnd == 1 else -sl)
+    return np.mean(out) / np.std(out)
+
+
+def jiggle(v: float):
+    """Return 1% variations around ``v``."""
+    return [v * 0.99, v, v * 1.01]
+
+
+def genHeatmap(forecast: float, hl: float, sigma: float = 1):
+    """Run OU simulations and return batch output for heatmap plotting."""
+    rPT = rSLm = np.linspace(0, 10, 21)
+    coeffs = {"forecast": forecast, "hl": hl, "sigma": sigma}
+    return Batch(coeffs, nIter=1e5, maxHP=100, rPT=rPT, rSLm=rSLm)
+
+
+def OUcoeff():
+    """Sweep OU parameters and run batch simulations."""
+    rPT = rSLm = np.linspace(0, 10, 21)
+    for prod_ in product([10, 5, 0, -5, -10], [5, 10, 25, 50, 100]):
+        coeffs = {"forecast": prod_[0], "hl": prod_[1], "sigma": 1}
+        output = Batch(coeffs, nIter=1e5, maxHP=100, rPT=rPT, rSLm=rSLm)
+    return output
+
+
+@dataclass
+class OUParams:
+    """Parameters of an Ornstein–Uhlenbeck process."""
+
+    phi: float
+    gamma: float
+    sigma: float
+
+
+def estimateOUParams(X_t: np.ndarray) -> OUParams:
+    """Estimate OU parameters via ordinary least squares."""
+    y = np.diff(X_t)
+    X = X_t[:-1].reshape(-1, 1)
+    reg = LinearRegression(fit_intercept=True)
+    reg.fit(X, y)
+    phi = -reg.coef_[0]
+    gamma = reg.intercept_ / phi
+    y_hat = reg.predict(X)
+    sigma = np.std(y - y_hat)
+    return OUParams(phi, gamma, sigma)
+
+
+def getIntegalW(t: np.ndarray, dW: np.ndarray, OU_params: OUParams) -> np.ndarray:
+    r"""Compute ``\int e^{phi t} dW`` for the OU process."""
+    exp_phi_s = np.exp(OU_params.phi * t)
+    integral_W = np.cumsum(exp_phi_s * dW)
+    return np.insert(integral_W, 0, 0)[:-1]
+
+
+def selectX0(X_0_in: Optional[float], OU_params: OUParams) -> float:
+    """Choose initial value ``X_0``; defaults to long‑term mean."""
+    return X_0_in if X_0_in is not None else OU_params.gamma
+
+
+def getOUProcess(
+    T: int,
+    OU_params: OUParams,
+    X_0: Optional[float] = None,
+    random_state: Optional[int] = None,
+) -> np.ndarray:
+    """Generate a sample path of an Ornstein–Uhlenbeck process."""
+    t = np.arange(T, dtype=np.float128)
+    exp_alpha_t = np.exp(-OU_params.phi * t)
+    dW = brownian_motion.get_dW(T, random_state)
+    integral_W = getIntegalW(t, dW, OU_params)
+    _X_0 = selectX0(X_0, OU_params)
+    return _X_0 * exp_alpha_t + OU_params.gamma * (1 - exp_alpha_t) + OU_params.sigma * exp_alpha_t * integral_W
+
+__all__ = [
+    'avgActiveSignals_','avgActiveSignals','discrete_signal','get_signal','betSize',
+    'getTargetPos','invPrice','limitPrice','getW','getNumConcBets','getBetsTiming',
+    'getHoldingPeriod','getHHI','computeDD_TuW','Batch','processBatch',
+    'expected_max','PSR','DSR','betSizePower','binSR','binHR','binFreq',
+    'mixGaussians','probFailure','runSRtrials','jiggle','genHeatmap','OUcoeff',
+    'OUParams','estimateOUParams','getIntegalW','selectX0','getOUProcess'
+]
