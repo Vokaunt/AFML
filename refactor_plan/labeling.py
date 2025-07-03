@@ -683,4 +683,22 @@ def getTimeDecay(tW, clfLastW = 1.):
     const = 1. - slope * clfW.iloc[-1]
     clfW = const + slope * clfW
 
-__all__ = ['getDailyVolatility','addVerticalBarrier','tradableHour','getTEvents','getTripleBarrier','getEvents','getBins','dropLabels','getBinsNew','get_up_cross','get_down_cross','getUpCross','getDownCross','getConcurrentBar','getAvgLabelUniq','mpSampleWeights','getBollingerBand','getSampleWeights','getIndMatrix','getAvgUniqueness','seqBootstrap','getRndT1','auxMC','mainMC','mpSampleW','SampleW','getConcurUniqueness','getTimeDecay']
+    return clfW
+
+# ======================================================================
+# Additions from missing functions list
+# ======================================================================
+
+def getExTimeDecay(tW, clfLastW: float = 1.0, exponent: int = 1):
+    """Exponential time decay for event weights."""
+    clfW = tW.sort_index().cumsum()
+    if clfLastW >= 0:
+        slope = ((1.0 - clfLastW) / clfW.iloc[-1]) ** exponent
+    else:
+        slope = (1.0 / ((clfLastW + 1) * clfW.iloc[-1])) ** exponent
+    const = 1.0 - slope * clfW.iloc[-1]
+    clfW = const + slope * clfW
+    clfW[clfW < 0] = 0
+    return clfW
+
+__all__ = ['getDailyVolatility','addVerticalBarrier','tradableHour','getTEvents','getTripleBarrier','getEvents','getBins','dropLabels','getBinsNew','get_up_cross','get_down_cross','getUpCross','getDownCross','getConcurrentBar','getAvgLabelUniq','mpSampleWeights','getBollingerBand','getSampleWeights','getIndMatrix','getAvgUniqueness','seqBootstrap','getRndT1','auxMC','mainMC','mpSampleW','SampleW','getConcurUniqueness','getTimeDecay','getExTimeDecay']
